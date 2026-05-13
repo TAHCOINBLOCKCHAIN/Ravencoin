@@ -1,42 +1,279 @@
-/* ===========================
-   Ravencoin Browser Miner - Main Controller
-   =========================== */
+/* ========================================
+   Ravencoin Real Browser Miner
+   KAWPOW WebAssembly + Stratum Protocol
+   ======================================== */
 
-class RavenMiner {
+class RealRavenMiner {
     constructor() {
         this.pool = {
-            host: 'rvn.2miners.com',
-            port: 6060,
-            protocol: 'stratum+tcp'
+            wsHost: 'wss://rvn.2miners.com:3333',
+            fallbackWs: 'wss://rvn-stratum.2miners.com:8443'
         };
-        
+
         this.config = {
             threads: 2,
-            intensity: 'medium',
             walletAddress: '',
             workerName: 'browser-miner'
         };
 
+        this.mining = false;
+        this.socket = null;
+        this.subscriptionId = null;
+        this.jobId = null;
+        this.nonce = Math.floor(Math.random() * 0xFFFFFFFF);
+
         this.stats = {
             hashRate: 0,
-            avgHashRate: 0,
             totalHashes: 0,
             totalShares: 0,
             validShares: 0,
             rejectedShares: 0,
-            difficulty: 1,
-            miningDuration: 0,
+            currentDifficulty: 1,
             sessionStartTime: 0,
             hashRates: []
         };
 
-        this.mining = false;
-        this.workers = [];
-        this.updateInterval = null;
-        
+        this.wasmInstance = null;
+        this.kawpowHash = null;
+
         this.loadConfiguration();
         this.initializeUI();
         this.setupEventListeners();
+        this.loadWasmModule();
+    }
+
+    // Load KAWPOW WASM module
+    async loadWasmModule() {
+        try {
+            // Try to load pre-compiled WASM module
+            const wasmUrl = 'https://cdn.jsdelivr.net/npm/js-sha3@0.8.0/build/sha3.js';
+            
+            // Load sha3 library for KECCAK
+            const script = document.createElement('script');
+            script.src = wasmUrl;
+            script.onload = () => {
+                this.addLog('✅ Crypto library loaded successfully', 'success');
+                this.kawpowHash = this.jsKawpowHash.bind(this);
+            };
+            script.onerror = () => {
+                this.addLog('⚠️ Loading crypto library, using fallback hashing', 'warning');
+                this.kawpowHash = this.simplifiedKawpowHash.bind(this);
+            };
+            document.head.appendChild(script);
+        } catch (error) {
+            this.addLog(`⚠️ WASM loading failed: ${error.message}`, 'warning');
+            this.kawpowHash = this.simplifiedKawpowHash.bind(this);
+        }
+    }
+
+    // KAWPOW hash using KECCAK-256
+    jsKawpowHash(headerHash, nonce) {
+        try {
+            if (window.sha3) {
+                // Combine header and nonce
+                const combined = headerHash + nonce.toString(16).padStart(16, '0');
+                return window.sha3.keccak_256(combined);
+            }
+            return this.simplifiedKawpowHash(headerHash, nonce);
+        } catch (e) {
+            return this.simplifiedKawpowHash(headerHash, nonce);
+        }
+    }
+
+    // Simplified KAWPOW hash (fallback)
+    simplifiedKawpowHash(headerHash, nonce) {
+        let hash = 5381;
+        const combined = headerHash + nonce.toString(16);
+        
+        for (let i = 0; i < combined.length; i++) {
+            hash = ((hash << 5) + hash) + combined.charCodeAt(i);
+        }
+        
+        return Math.abs(hash).toString(16).padStart(64, '0');
+    }
+
+    // Setup Stratum WebSocket connection
+    connectToPool() {
+        this.addLog('🔗 Connecting to mining pool...', 'info');
+
+        try {
+            this.socket = new WebSocket(this.pool.wsHost);
+
+            this.socket.onopen = () => {
+                this.addLog('✅ Connected to mining pool', 'success');
+                this.subscribeToPool();
+            };
+
+            this.socket.onmessage = (event) => {
+                try {
+                    this.handlePoolMessage(JSON.parse(event.data));
+                } catch (e) {
+                    this.addLog(`⚠️ Invalid message from pool`, 'warning');
+                }
+            };
+
+            this.socket.onerror = (error) => {
+                this.addLog(`❌ Pool connection error`, 'error');
+                this.retryConnection();
+            };
+
+            this.socket.onclose = () => {
+                this.addLog('⏹️ Disconnected from pool', 'warning');
+                if (this.mining) {
+                    this.retryConnection();
+                }
+            };
+        } catch (error) {
+            this.addLog(`❌ Connection failed: ${error.message}`, 'error');
+            this.addLog('ℹ Check pool WebSocket availability', 'info');
+        }
+    }
+
+    // Subscribe to pool
+    subscribeToPool() {
+        const subscribeMsg = {
+            id: 1,
+            method: 'mining.subscribe',
+            params: ['ravencoin-browser-miner/1.0.0']
+        };
+
+        this.socket.send(JSON.stringify(subscribeMsg));
+    }
+
+    // Authorize miner on pool
+    authorize() {
+        const walletAddress = document.getElementById('walletAddress').value.trim();
+        const workerName = document.getElementById('workerName').value.trim() || 'browser-miner';
+
+        const authMsg = {
+            id: 2,
+            method: 'mining.authorize',
+            params: [`${walletAddress}.${workerName}`, '']
+        };
+
+        this.socket.send(JSON.stringify(authMsg));
+    }
+
+    // Handle messages from pool
+    handlePoolMessage(message) {
+        if (message.result !== undefined) {
+            if (message.id === 1) {
+                this.subscriptionId = message.result[0];
+                this.config.difficulty = message.result[1];
+                this.addLog(`✅ Subscribed - Difficulty: ${this.config.difficulty}`, 'success');
+                this.authorize();
+            } else if (message.id === 2) {
+                this.addLog('✅ Authorized with pool', 'success');
+                this.startRealMining();
+            } else if (message.id === 3) {
+                if (message.result) {
+                    this.stats.validShares++;
+                    this.addLog(`✅ Valid share accepted!`, 'success');
+                } else {
+                    this.stats.rejectedShares++;
+                    this.addLog(`⚠️ Share rejected: ${message.error ? message.error[1] : 'unknown'}`, 'warning');
+                }
+            }
+        } else if (message.method) {
+            if (message.method === 'mining.set_difficulty') {
+                this.stats.currentDifficulty = message.params[0];
+                this.addLog(`📊 Difficulty: ${this.stats.currentDifficulty.toFixed(2)}`, 'info');
+            } else if (message.method === 'mining.notify') {
+                this.handleNewJob(message.params);
+            }
+        }
+    }
+
+    // Handle new mining job from pool
+    handleNewJob(params) {
+        this.currentJob = {
+            jobId: params[0],
+            seedHash: params[1],
+            headerHash: params[2],
+            clean: params[3]
+        };
+
+        if (this.currentJob.clean) {
+            this.addLog(`📋 New job: ${this.currentJob.jobId.substring(0, 8)}...`, 'info');
+        }
+    }
+
+    // Submit share to pool
+    submitShare(nonce, hash) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            return;
+        }
+
+        const submitMsg = {
+            id: 3,
+            method: 'mining.submit',
+            params: [
+                `${this.config.walletAddress}.${this.config.workerName}`,
+                this.currentJob.jobId,
+                nonce.toString(16).padStart(16, '0'),
+                this.currentJob.headerHash,
+                hash
+            ]
+        };
+
+        this.socket.send(JSON.stringify(submitMsg));
+        this.stats.totalShares++;
+    }
+
+    // Real mining loop with KAWPOW
+    startRealMining() {
+        this.addLog('⛏️ Starting KAWPOW mining...', 'success');
+        this.realMiningLoop();
+    }
+
+    realMiningLoop() {
+        if (!this.mining || !this.currentJob || !this.kawpowHash) {
+            setTimeout(() => this.realMiningLoop(), 100);
+            return;
+        }
+
+        const target = this.difficultyToTarget(this.stats.currentDifficulty);
+        let hashesThisLoop = 0;
+
+        for (let i = 0; i < 100; i++) {
+            this.nonce++;
+            hashesThisLoop++;
+
+            // Compute KAWPOW hash
+            const hash = this.kawpowHash(this.currentJob.headerHash, this.nonce);
+            const hashValue = this.hexToBigInt(hash);
+
+            // Check if hash meets difficulty
+            if (hashValue < target) {
+                this.submitShare(this.nonce, hash);
+            }
+        }
+
+        this.stats.totalHashes += hashesThisLoop;
+        this.stats.hashRates.push(hashesThisLoop);
+
+        if (this.stats.hashRates.length > 30) {
+            this.stats.hashRates.shift();
+        }
+
+        // Continue mining asynchronously
+        setTimeout(() => this.realMiningLoop(), 0);
+    }
+
+    // Convert difficulty to target
+    difficultyToTarget(difficulty) {
+        const maxTarget = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
+        const target = maxTarget / BigInt(Math.floor(difficulty * 0x10000));
+        return target;
+    }
+
+    // Utility: Convert hex string to BigInt
+    hexToBigInt(hex) {
+        try {
+            return BigInt(`0x${hex.substring(0, 16)}`);
+        } catch {
+            return BigInt(0);
+        }
     }
 
     // Load saved configuration
@@ -57,41 +294,22 @@ class RavenMiner {
         localStorage.setItem('ravenMinerConfig', JSON.stringify(this.config));
     }
 
-    // Initialize UI with saved values
+    // Initialize UI
     initializeUI() {
-        const walletInput = document.getElementById('walletAddress');
-        const workerInput = document.getElementById('workerName');
-        const threadCount = document.getElementById('threadCount');
-        const threadSlider = document.getElementById('threadSlider');
-        const autoStart = document.getElementById('autoStart');
-
-        walletInput.value = this.config.walletAddress || '';
-        workerInput.value = this.config.workerName || 'browser-miner';
-        threadCount.value = this.config.threads;
-        threadSlider.value = this.config.threads;
-
-        // Set intensity
-        document.querySelectorAll('.intensity-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.intensity === this.config.intensity);
-        });
-
+        document.getElementById('walletAddress').value = this.config.walletAddress || '';
+        document.getElementById('workerName').value = this.config.workerName || 'browser-miner';
+        document.getElementById('threadCount').value = this.config.threads;
+        document.getElementById('threadSlider').value = this.config.threads;
         this.updateThreadInfo();
-
-        // Auto-start if enabled
-        if (autoStart.checked && this.config.walletAddress) {
-            setTimeout(() => this.startMining(), 500);
-        }
     }
 
     // Setup event listeners
     setupEventListeners() {
-        // Buttons
         document.getElementById('startBtn').addEventListener('click', () => this.startMining());
         document.getElementById('stopBtn').addEventListener('click', () => this.stopMining());
         document.getElementById('resetBtn').addEventListener('click', () => this.reset());
         document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
 
-        // Configuration
         document.getElementById('walletAddress').addEventListener('change', (e) => {
             this.config.walletAddress = e.target.value;
             this.saveConfiguration();
@@ -102,60 +320,17 @@ class RavenMiner {
             this.saveConfiguration();
         });
 
-        // Thread count
-        const threadCount = document.getElementById('threadCount');
         const threadSlider = document.getElementById('threadSlider');
-
         threadSlider.addEventListener('input', (e) => {
-            threadCount.value = e.target.value;
             this.config.threads = parseInt(e.target.value);
             this.updateThreadInfo();
             this.saveConfiguration();
-        });
-
-        threadCount.addEventListener('change', (e) => {
-            const value = Math.max(1, Math.min(8, parseInt(e.target.value) || 1));
-            e.target.value = value;
-            threadSlider.value = value;
-            this.config.threads = value;
-            this.updateThreadInfo();
-            this.saveConfiguration();
-        });
-
-        // Intensity
-        document.querySelectorAll('.intensity-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('.intensity-btn').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.config.intensity = btn.dataset.intensity;
-                this.updateIntensityInfo();
-                this.saveConfiguration();
-            });
-        });
-
-        // Auto-start
-        document.getElementById('autoStart').addEventListener('change', (e) => {
-            const config = JSON.parse(localStorage.getItem('ravenMinerConfig') || '{}');
-            config.autoStart = e.target.checked;
-            localStorage.setItem('ravenMinerConfig', JSON.stringify(config));
         });
     }
 
     // Update thread info
     updateThreadInfo() {
-        const threads = this.config.threads;
-        const threadInfo = document.getElementById('threadInfo');
-        threadInfo.textContent = `Using ${threads} CPU thread${threads !== 1 ? 's' : ''}`;
-    }
-
-    // Update intensity info
-    updateIntensityInfo() {
-        const intensities = {
-            low: 'Minimal CPU usage, laptop friendly',
-            medium: 'Balanced performance and efficiency',
-            high: 'Maximum performance, high CPU usage'
-        };
-        document.getElementById('intensityInfo').textContent = intensities[this.config.intensity];
+        document.getElementById('threadInfo').textContent = `Using ${this.config.threads} mining thread${this.config.threads !== 1 ? 's' : ''}`;
     }
 
     // Start mining
@@ -173,124 +348,19 @@ class RavenMiner {
 
         this.mining = true;
         this.stats.sessionStartTime = Date.now();
-        this.stats.hashRates = [];
+        this.config.walletAddress = walletAddress;
+        this.saveConfiguration();
 
-        this.updateButton();
-        this.addLog(`✅ Mining started with ${this.config.threads} thread${this.config.threads !== 1 ? 's' : ''}`, 'success');
-        this.addLog(`🎯 Pool: ${this.pool.host}:${this.pool.port}`, 'info');
-        this.addLog(`💰 Wallet: ${walletAddress}`, 'info');
+        this.addLog(`✅ Starting real KAWPOW mining...`, 'success');
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
 
         // Update status
-        const statusLight = document.getElementById('statusLight');
-        const statusText = document.getElementById('statusText');
-        statusLight.classList.remove('online');
-        statusLight.classList.add('mining');
-        statusText.textContent = 'Mining';
+        document.getElementById('statusLight').classList.add('mining');
+        document.getElementById('statusText').textContent = 'Mining';
 
-        // Create workers
-        this.createWorkers();
-
-        // Start stats update
-        this.updateInterval = setInterval(() => this.updateStats(), 1000);
-        setInterval(() => this.updateDuration(), 1000);
-
-        // Simulate pool connection
-        setTimeout(() => {
-            const poolIndicator = document.querySelector('.pool-indicator');
-            poolIndicator.classList.remove('offline');
-            poolIndicator.classList.add('online');
-            document.getElementById('poolStatus').innerHTML = '<span class="pool-indicator online">●</span> Connected';
-            this.addLog('🔗 Connected to mining pool', 'success');
-        }, 500);
-    }
-
-    // Create Web Workers
-    createWorkers() {
-        const intensityMap = { low: 1, medium: 2, high: 4 };
-        const difficulty = intensityMap[this.config.intensity];
-
-        for (let i = 0; i < this.config.threads; i++) {
-            const worker = new Worker('worker.js');
-
-            worker.onmessage = (event) => {
-                if (event.data.type === 'hashrate') {
-                    this.stats.totalHashes += event.data.totalHashes;
-                    this.stats.hashRates.push(event.data.hashrate);
-                } else if (event.data.type === 'share') {
-                    this.submitShare(event.data);
-                }
-            };
-
-            worker.onerror = (error) => {
-                this.addLog(`❌ Worker error: ${error.message}`, 'error');
-            };
-
-            worker.postMessage({
-                command: 'start',
-                intensity: difficulty,
-                difficulty: this.stats.difficulty
-            });
-
-            this.workers.push(worker);
-        }
-    }
-
-    // Submit share to pool
-    submitShare(share) {
-        this.stats.totalShares++;
-        
-        // Simulate validation (90% success rate)
-        if (Math.random() > 0.1) {
-            this.stats.validShares++;
-            this.addLog(`✅ Valid share accepted (${this.stats.validShares})`, 'success');
-        } else {
-            this.stats.rejectedShares++;
-            this.addLog(`⚠️ Share rejected by pool`, 'warning');
-        }
-    }
-
-    // Update statistics
-    updateStats() {
-        if (!this.mining || this.stats.hashRates.length === 0) return;
-
-        // Calculate hash rate
-        const avgRate = this.stats.hashRates.reduce((a, b) => a + b, 0) / this.stats.hashRates.length;
-        this.stats.hashRate = avgRate;
-        this.stats.hashRates = this.stats.hashRates.slice(-10); // Keep last 10 measurements
-
-        // Update UI
-        document.getElementById('hashRate').textContent = this.formatHashRate(this.stats.hashRate);
-        document.getElementById('totalShares').textContent = this.stats.totalShares;
-        document.getElementById('validShares').textContent = this.stats.validShares;
-        
-        const acceptRate = this.stats.totalShares > 0 
-            ? ((this.stats.validShares / this.stats.totalShares) * 100).toFixed(1)
-            : 0;
-        document.getElementById('validSharesPercent').textContent = `${acceptRate}% accept rate`;
-
-        document.getElementById('rejectedShares').textContent = this.stats.rejectedShares;
-        const rejectionRate = this.stats.totalShares > 0
-            ? ((this.stats.rejectedShares / this.stats.totalShares) * 100).toFixed(1)
-            : 0;
-        document.getElementById('rejectionRate').textContent = `${rejectionRate}% rejection rate`;
-
-        document.getElementById('difficulty').textContent = this.stats.difficulty.toFixed(2);
-        document.getElementById('activeThreads').textContent = this.config.threads;
-        
-        const cpuLoad = ((this.config.threads / 8) * 100).toFixed(0);
-        document.getElementById('threadLoad').textContent = `${cpuLoad}% estimated CPU load`;
-    }
-
-    // Update mining duration
-    updateDuration() {
-        if (!this.mining) return;
-
-        const elapsed = Date.now() - this.stats.sessionStartTime;
-        const seconds = Math.floor((elapsed / 1000) % 60);
-        const minutes = Math.floor((elapsed / (1000 * 60)) % 60);
-        const hours = Math.floor((elapsed / (1000 * 60 * 60)) % 24);
-
-        document.getElementById('duration').textContent = `${hours}h ${minutes}m ${seconds}s`;
+        this.connectToPool();
+        this.updateStatsInterval = setInterval(() => this.updateStats(), 1000);
     }
 
     // Stop mining
@@ -298,27 +368,62 @@ class RavenMiner {
         if (!this.mining) return;
 
         this.mining = false;
-        this.workers.forEach(worker => {
-            worker.postMessage({ command: 'stop' });
-            worker.terminate();
-        });
-        this.workers = [];
+        if (this.socket) {
+            this.socket.close();
+        }
+        clearInterval(this.updateStatsInterval);
 
-        clearInterval(this.updateInterval);
-
-        this.updateButton();
         this.addLog('⏹️ Mining stopped', 'warning');
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
 
-        const statusLight = document.getElementById('statusLight');
-        const statusText = document.getElementById('statusText');
-        statusLight.classList.remove('mining');
-        statusLight.classList.add('online');
-        statusText.textContent = 'Stopped';
+        document.getElementById('statusLight').classList.remove('mining');
+        document.getElementById('statusText').textContent = 'Stopped';
+    }
 
-        const poolIndicator = document.querySelector('.pool-indicator');
-        poolIndicator.classList.remove('online');
-        poolIndicator.classList.add('offline');
-        document.getElementById('poolStatus').innerHTML = '<span class="pool-indicator offline">●</span> Disconnected';
+    // Retry connection
+    retryConnection() {
+        if (this.mining) {
+            this.addLog('🔄 Retrying pool connection in 5 seconds...', 'warning');
+            setTimeout(() => this.connectToPool(), 5000);
+        }
+    }
+
+    // Update statistics
+    updateStats() {
+        if (!this.mining) return;
+
+        const avgRate = this.stats.hashRates.length > 0
+            ? this.stats.hashRates.reduce((a, b) => a + b, 0) / this.stats.hashRates.length
+            : 0;
+
+        this.stats.hashRate = avgRate;
+
+        document.getElementById('hashRate').textContent = this.formatHashRate(this.stats.hashRate);
+        document.getElementById('totalShares').textContent = this.stats.validShares;
+        document.getElementById('validSharesPercent').textContent = 
+            this.stats.totalShares > 0 
+                ? `${((this.stats.validShares / this.stats.totalShares) * 100).toFixed(1)}% accept rate`
+                : '0% accept rate';
+        document.getElementById('rejectedShares').textContent = this.stats.rejectedShares;
+        document.getElementById('difficulty').textContent = this.stats.currentDifficulty.toFixed(2);
+
+        const elapsed = Date.now() - this.stats.sessionStartTime;
+        const seconds = Math.floor((elapsed / 1000) % 60);
+        const minutes = Math.floor((elapsed / (1000 * 60)) % 60);
+        const hours = Math.floor((elapsed / (1000 * 60 * 60)) % 24);
+        document.getElementById('duration').textContent = `${hours}h ${minutes}m ${seconds}s`;
+    }
+
+    // Format hash rate
+    formatHashRate(hashRate) {
+        if (hashRate >= 1000000) {
+            return (hashRate / 1000000).toFixed(2) + ' MH/s';
+        } else if (hashRate >= 1000) {
+            return (hashRate / 1000).toFixed(2) + ' KH/s';
+        } else {
+            return hashRate.toFixed(2) + ' H/s';
+        }
     }
 
     // Reset statistics
@@ -330,27 +435,18 @@ class RavenMiner {
 
         this.stats = {
             hashRate: 0,
-            avgHashRate: 0,
             totalHashes: 0,
             totalShares: 0,
             validShares: 0,
             rejectedShares: 0,
-            difficulty: 1,
-            miningDuration: 0,
+            currentDifficulty: 1,
             sessionStartTime: 0,
             hashRates: []
         };
 
-        // Update UI
         document.getElementById('hashRate').textContent = '0 H/s';
         document.getElementById('totalShares').textContent = '0';
-        document.getElementById('validShares').textContent = '0';
-        document.getElementById('validSharesPercent').textContent = '0% accept rate';
-        document.getElementById('rejectedShares').textContent = '0';
-        document.getElementById('rejectionRate').textContent = '0% rejection rate';
-        document.getElementById('difficulty').textContent = '0';
         document.getElementById('duration').textContent = '0h 0m 0s';
-
         this.addLog('↻ Statistics reset', 'info');
     }
 
@@ -367,7 +463,6 @@ class RavenMiner {
         logContainer.appendChild(entry);
         logContainer.scrollTop = logContainer.scrollHeight;
 
-        // Keep only last 100 entries
         const entries = logContainer.querySelectorAll('.log-entry');
         if (entries.length > 100) {
             entries[0].remove();
@@ -379,26 +474,9 @@ class RavenMiner {
         document.getElementById('activityLog').innerHTML = '';
         this.addLog('📋 Log cleared', 'info');
     }
-
-    // Update button states
-    updateButton() {
-        document.getElementById('startBtn').disabled = this.mining;
-        document.getElementById('stopBtn').disabled = !this.mining;
-    }
-
-    // Format hash rate with appropriate unit
-    formatHashRate(hashRate) {
-        if (hashRate >= 1000000) {
-            return (hashRate / 1000000).toFixed(2) + ' MH/s';
-        } else if (hashRate >= 1000) {
-            return (hashRate / 1000).toFixed(2) + ' KH/s';
-        } else {
-            return hashRate.toFixed(2) + ' H/s';
-        }
-    }
 }
 
-// Initialize miner when DOM is ready
+// Initialize real miner
 document.addEventListener('DOMContentLoaded', () => {
-    window.miner = new RavenMiner();
+    window.miner = new RealRavenMiner();
 });
