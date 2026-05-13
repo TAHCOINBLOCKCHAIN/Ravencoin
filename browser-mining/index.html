@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ravencoin Browser Miner</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>🪨 Ravencoin Browser Miner</h1>
+                <p>Earn RVN directly from your browser</p>
+            </div>
+            <div class="header-status">
+                <span id="statusLight" class="status-light online"></span>
+                <span id="statusText" class="status-text">Ready</span>
+            </div>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="grid-container">
+            <!-- Left Column: Configuration & Controls -->
+            <div class="panel configuration-panel">
+                <h2>⚙️ Configuration</h2>
+
+                <!-- Wallet Address -->
+                <div class="form-group">
+                    <label for="walletAddress">💰 Wallet Address</label>
+                    <input 
+                        type="text" 
+                        id="walletAddress" 
+                        placeholder="e.g., RKJinFB9D3Q4a42H3J1JFbZ5XdJJ1vbCKD"
+                        class="form-input"
+                    >
+                    <small>Your Ravencoin wallet address for receiving earnings</small>
+                </div>
+
+                <!-- Worker Name -->
+                <div class="form-group">
+                    <label for="workerName">👤 Worker Name</label>
+                    <input 
+                        type="text" 
+                        id="workerName" 
+                        value="browser-miner"
+                        class="form-input"
+                    >
+                    <small>Optional identifier for your mining session</small>
+                </div>
+
+                <!-- Thread Count -->
+                <div class="form-group">
+                    <label for="threadSlider">🔄 CPU Threads</label>
+                    <div class="thread-control">
+                        <input 
+                            type="range" 
+                            id="threadSlider" 
+                            min="1" 
+                            max="8" 
+                            value="2"
+                            class="form-slider"
+                        >
+                        <input 
+                            type="number" 
+                            id="threadCount" 
+                            min="1" 
+                            max="8" 
+                            value="2"
+                            class="form-number"
+                        >
+                    </div>
+                    <div id="threadInfo" class="info-text">Using 2 CPU threads</div>
+                </div>
+
+                <!-- Intensity -->
+                <div class="form-group">
+                    <label>⚡ Mining Intensity</label>
+                    <div class="intensity-buttons">
+                        <button class="intensity-btn" data-intensity="low">
+                            Low
+                        </button>
+                        <button class="intensity-btn active" data-intensity="medium">
+                            Medium
+                        </button>
+                        <button class="intensity-btn" data-intensity="high">
+                            High
+                        </button>
+                    </div>
+                    <div id="intensityInfo" class="info-text">Balanced performance and efficiency</div>
+                </div>
+
+                <!-- Auto-Start -->
+                <div class="form-group checkbox-group">
+                    <label for="autoStart">
+                        <input type="checkbox" id="autoStart">
+                        Auto-start on page reload
+                    </label>
+                </div>
+
+                <!-- Control Buttons -->
+                <div class="button-group">
+                    <button id="startBtn" class="btn btn-primary">▶️ Start Mining</button>
+                    <button id="stopBtn" class="btn btn-secondary" disabled>⏹️ Stop Mining</button>
+                </div>
+
+                <button id="resetBtn" class="btn btn-outline">↻ Reset Stats</button>
+            </div>
+
+            <!-- Middle Column: Statistics -->
+            <div class="stats-column">
+                <!-- Pool Status -->
+                <div class="panel status-panel">
+                    <h3>🔗 Pool Connection</h3>
+                    <div id="poolStatus" class="pool-status">
+                        <span class="pool-indicator offline">●</span> Disconnected
+                    </div>
+                    <div class="pool-info">
+                        <p><strong>Pool:</strong> rvn.2miners.com:6060</p>
+                        <p><strong>Fee:</strong> 1%</p>
+                        <p><strong>Min Payout:</strong> 0.1 RVN</p>
+                    </div>
+                </div>
+
+                <!-- Main Stats -->
+                <div class="panel stats-panel">
+                    <h3>📊 Mining Statistics</h3>
+                    
+                    <div class="stat-item large">
+                        <div class="stat-label">Hash Rate</div>
+                        <div id="hashRate" class="stat-value">0 H/s</div>
+                    </div>
+
+                    <div class="stat-row">
+                        <div class="stat-item">
+                            <div class="stat-label">Uptime</div>
+                            <div id="duration" class="stat-value">0h 0m 0s</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">Threads</div>
+                            <div id="activeThreads" class="stat-value">2</div>
+                        </div>
+                    </div>
+
+                    <div class="stat-row">
+                        <div class="stat-item">
+                            <div class="stat-label">Difficulty</div>
+                            <div id="difficulty" class="stat-value">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">CPU Load</div>
+                            <div id="threadLoad" class="stat-value">25% load</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Share Statistics -->
+                <div class="panel shares-panel">
+                    <h3>✅ Share Statistics</h3>
+                    
+                    <div class="share-stat">
+                        <div class="share-label">Total Shares</div>
+                        <div class="share-value" id="totalShares">0</div>
+                    </div>
+
+                    <div class="share-stat">
+                        <div class="share-label">Valid Shares</div>
+                        <div class="share-value valid" id="validShares">0</div>
+                        <div class="share-rate" id="validSharesPercent">0% accept rate</div>
+                    </div>
+
+                    <div class="share-stat">
+                        <div class="share-label">Rejected Shares</div>
+                        <div class="share-value rejected" id="rejectedShares">0</div>
+                        <div class="share-rate" id="rejectionRate">0% rejection rate</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Activity Log -->
+            <div class="panel activity-panel">
+                <div class="activity-header">
+                    <h2>📋 Activity Log</h2>
+                    <button id="clearLogBtn" class="btn btn-small">Clear</button>
+                </div>
+                <div id="activityLog" class="activity-log">
+                    <div class="log-entry info">
+                        <span class="log-time">00:00:00</span>
+                        <span class="log-message">✓ Ravencoin Browser Miner initialized</span>
+                    </div>
+                    <div class="log-entry info">
+                        <span class="log-time">00:00:00</span>
+                        <span class="log-message">ℹ Connected to rvn.2miners.com pool</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>
+                🪨 <strong>Ravencoin Browser Miner</strong> v1.0.0 | 
+                Pool: <a href="https://2miners.com/rvn" target="_blank">2Miners</a> | 
+                <a href="https://ravencoin.org" target="_blank">Learn more about Ravencoin</a>
+            </p>
+            <p style="font-size: 0.85em; margin-top: 0.5rem;">
+                ⚠️ <strong>Note:</strong> Browser mining is CPU-intensive. Monitor system temperature and close other applications.
+            </p>
+        </footer>
+    </div>
+
+    <script src="miner.js"></script>
+</body>
+</html>
