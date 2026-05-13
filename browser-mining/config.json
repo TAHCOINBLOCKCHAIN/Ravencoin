@@ -1,0 +1,70 @@
+{
+  "pool": {
+    "name": "2Miners",
+    "address": "rvn.2miners.com",
+    "port": 6060,
+    "protocol": "stratum+tcp",
+    "fee": 1,
+    "minPayout": 0.1,
+    "payoutInterval": "daily",
+    "websiteUrl": "https://2miners.com/rvn",
+    "statsUrl": "https://rvn.2miners.com/"
+  },
+  "mining": {
+    "defaultThreads": 2,
+    "maxThreads": 8,
+    "minThreads": 1,
+    "defaultIntensity": "medium",
+    "intensityLevels": {
+      "low": {
+        "hashesPerIteration": 1,
+        "cpuUsage": "low",
+        "description": "Minimal CPU usage, laptop friendly"
+      },
+      "medium": {
+        "hashesPerIteration": 2,
+        "cpuUsage": "medium",
+        "description": "Balanced performance and efficiency"
+      },
+      "high": {
+        "hashesPerIteration": 4,
+        "cpuUsage": "high",
+        "description": "Maximum performance, high CPU usage"
+      }
+    }
+  },
+  "performance": {
+    "expectedHashRates": {
+      "1thread": "1-5 KH/s",
+      "2threads": "2-10 KH/s",
+      "4threads": "4-20 KH/s",
+      "8threads": "8-40 KH/s"
+    },
+    "note": "Hash rates vary based on CPU model, system load, browser implementation, and intensity setting"
+  },
+  "algorithm": {
+    "name": "KAWPOW",
+    "type": "PoW",
+    "coin": "Ravencoin"
+  },
+  "features": [
+    "Zero installation required",
+    "Web Worker based background mining",
+    "Configurable thread count and intensity",
+    "Real-time statistics and monitoring",
+    "Activity log with event tracking",
+    "Settings persistence via LocalStorage",
+    "Auto-start on page reload option",
+    "Pool connection management",
+    "Share submission tracking"
+  ],
+  "browserCompatibility": {
+    "chrome": "52+",
+    "firefox": "55+",
+    "safari": "10.1+",
+    "edge": "15+",
+    "opera": "39+"
+  },
+  "version": "1.0.0",
+  "updated": "2026-05-13"
+}
